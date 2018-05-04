@@ -124,6 +124,19 @@ public class BatchDestroyOperation extends DistributedCacheOperation {
             }
           }
         }
+
+        // destroy dropped event from unprocessedKeys
+        if ((Long) this.key == 0L && this.tailKey == -1) {
+          SerialGatewaySenderEventProcessor ep =
+              (SerialGatewaySenderEventProcessor) rgn.getSerialGatewaySender().getEventProcessor();
+          boolean removed = ep.basicHandlePrimaryDestroy(ev.getEventId());
+          if (removed) {
+            if (isDebugEnabled) {
+              logger.debug("Removed a dropped event {} from unprocessedEvents.",
+                  (EntryEventImpl) event);
+            }
+          }
+        }
         this.appliedOperation = true;
       } catch (CacheWriterException e) {
         throw new Error(

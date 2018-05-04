@@ -173,6 +173,9 @@ public abstract class AbstractGatewaySender implements GatewaySender, Distributi
 
   protected volatile ConcurrentLinkedQueue<TmpQueueEvent> tmpQueuedEvents =
       new ConcurrentLinkedQueue<>();
+
+  protected volatile ConcurrentLinkedQueue<EntryEventImpl> tmpDroppedEvents =
+      new ConcurrentLinkedQueue<>();
   /**
    * The number of seconds to wait before stopping the GatewaySender. Default is 0 seconds.
    */
@@ -845,14 +848,33 @@ public abstract class AbstractGatewaySender implements GatewaySender, Distributi
     final boolean isDebugEnabled = logger.isDebugEnabled();
 
     // If this gateway is not running, return
+    EntryEventImpl droppedEvent = null;
     if (!isRunning()) {
+      if (this.isPrimary()) {
+        // clone event without offheap
+        droppedEvent =
+            EntryEventImpl.create(event.getRegion(), event.getOperation(), event.getKey(), null,
+                null, false, event.getDistributedMember(), false, event.getEventId());
+        droppedEvent.disallowOffHeapValues();
+
+        if (this.eventProcessor != null) {
+          this.eventProcessor.registerEventDroppedInPrimaryQueue(droppedEvent);
+        } else {
+          tmpDroppedEvents.add(droppedEvent);
+          if (isDebugEnabled) {
+            logger.debug("eventProcessor is null, add to tmpDroppedEvents for evnet {}",
+                droppedEvent);
+          }
+        }
+      }
       if (isDebugEnabled) {
         logger.debug("Returning back without putting into the gateway sender queue:" + event);
       }
-      if (this.eventProcessor != null) {
-        this.eventProcessor.registerEventDroppedInPrimaryQueue(event);
-      }
       return;
+    }
+    // process tmpDroppedEvents
+    while ((droppedEvent = tmpDroppedEvents.poll()) != null) {
+      this.eventProcessor.registerEventDroppedInPrimaryQueue(droppedEvent);
     }
 
     final GatewaySenderStats stats = getStatistics();
@@ -1224,7 +1246,7 @@ public abstract class AbstractGatewaySender implements GatewaySender, Distributi
     return region;
   }
 
-  protected abstract void setModifiedEventId(EntryEventImpl clonedEvent);
+  public abstract void setModifiedEventId(EntryEventImpl clonedEvent);
 
   public static class DefaultGatewayEventFilter
       implements org.apache.geode.internal.cache.GatewayEventFilter {
